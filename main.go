@@ -8,6 +8,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/go-redis/redis/v8"
 	"github.com/gorilla/mux"
@@ -20,7 +23,7 @@ func main() {
 	redisHost := os.Getenv("REDIS_HOST")
 	redisPassword := os.Getenv("REDIS_PASSWORD")
 
-	op := &redis.Options{Addr: redisHost, Password: redisPassword, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
+	op := &redis.Options{Addr: redisHost, Password: redisPassword, TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}, WriteTimeout: 5 * time.Second}
 	client := redis.NewClient(op)
 
 	ctx := context.Background()
@@ -35,7 +38,24 @@ func main() {
 	router.HandleFunc("/users/", uh.createUser).Methods(http.MethodPost)
 	router.HandleFunc("/users/{userid}", uh.getUser).Methods(http.MethodGet)
 
-	log.Fatal(http.ListenAndServe(":8080", router))
+	server := http.Server{Addr: ":8080", Handler: router}
+	exit := make(chan os.Signal)
+	signal.Notify(exit, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		log.Println("press ctrl+c to shutdown")
+		<-exit
+		if client != nil {
+			err := client.Close()
+			if err != nil {
+				log.Println("failed to close redis", err)
+			}
+		}
+		server.Shutdown(context.Background())
+	}()
+
+	log.Fatal(server.ListenAndServe())
+	log.Println("application stopped")
 }
 
 type userHandler struct {
